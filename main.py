@@ -28,7 +28,7 @@ dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
 # setting up the networks
 autoencoder = CAE.Autoencoder(n_classes).to(device)
-gan = CGAN.GAN(BATCH_SIZE, 28, 7, 7, 2).to(device)
+gan = CGAN.CGAN(BATCH_SIZE, 28, 7, 7, 2).to(device)
 
 # print the summary of the AE and G
 autoencoder.get_summary()

@@ -9,14 +9,15 @@ from torchinfo import summary
 import Plots
 
 
-class GAN(nn.Module):
+class CGAN(nn.Module):
     def __init__(self, batch_size, d_in_img_s, d_out_img_s, g_mid_img_s, n_classes, greyscale=False):
-        super(GAN, self).__init__()
+        super(CGAN, self).__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.batch_size = batch_size
         self.n_classes = n_classes
         self.noise_size = 100
         self.d_in_img_s = d_in_img_s
+        self.greyscale = greyscale
 
         # init the networks and apply weight init
         self.generator = Generator(n_classes, g_mid_img_s, greyscale)
@@ -24,7 +25,7 @@ class GAN(nn.Module):
         self.discriminator = Discriminator(d_in_img_s, d_out_img_s, n_classes, greyscale)
         self.discriminator.apply(self.weights_init)
 
-        self.criterion = nn.CrossEntropyLoss() # the loss is CrossEntropy for both the D and G
+        self.criterion = nn.BCELoss() # the loss is BCELoss for both the D and G
         self.g_optimizer = optim.Adam(self.generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
         self.d_optimizer = optim.Adam(self.discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
 
@@ -107,7 +108,7 @@ class GAN(nn.Module):
         summary(self.generator, input_size=[(self.noise_size,), (1,)])
         print("")
         print("Summary of the Discriminator")
-        summary(self.discriminator, input_size=[(1, 3, self.d_in_img_s, self.d_in_img_s), (1,)])
+        summary(self.discriminator, input_size=[(1, 1 if self.greyscale else 3, self.d_in_img_s, self.d_in_img_s), (1,)])
 
     def opt_g(self, fake_result):
         g_loss = self.criterion(fake_result.view(-1), self.get_labels(real=True, noise=False))
@@ -166,11 +167,11 @@ class Generator(nn.Module):
         )
 
         self.generator2 = nn.Sequential(
-            nn.ConvTranspose2d(129, 1024, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(1024),
+            nn.ConvTranspose2d(129, 512, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(512),
             nn.LeakyReLU(0.2, inplace=True),
 
-            nn.ConvTranspose2d(1024, self.out_channels, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(512, self.out_channels, 4, 2, 1, bias=False),
             nn.Tanh(),
 
             # the output of the generator is an RGB image if input=7x7 => output=28x28 | if input=16x16 => output=64x64
