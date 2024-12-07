@@ -6,9 +6,11 @@ import torch.optim as optim
 from tqdm.auto import tqdm
 from torchinfo import summary
 
+import Plots
+
 
 class GAN(nn.Module):
-    def __init__(self, loss_fn, batch_size, d_in_img_s, d_out_img_s, g_mid_img_s, n_classes, greyscale):
+    def __init__(self, batch_size, d_in_img_s, d_out_img_s, g_mid_img_s, n_classes, greyscale=False):
         super(GAN, self).__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.batch_size = batch_size
@@ -22,20 +24,18 @@ class GAN(nn.Module):
         self.discriminator = Discriminator(d_in_img_s, d_out_img_s, n_classes, greyscale)
         self.discriminator.apply(self.weights_init)
 
-        self.criterion = loss_fn # the loss is CrossEntropy for both the D and G
-        # /TODO keep tuning the LRs if necessary
-        # /TODO maybe SGD opt
+        self.criterion = nn.CrossEntropyLoss() # the loss is CrossEntropy for both the D and G
         self.g_optimizer = optim.Adam(self.generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
         self.d_optimizer = optim.Adam(self.discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
-
-        self.real_label = torch.full((batch_size,), 1, dtype=torch.float, device=self.device)
-        self.fake_label = torch.full((batch_size,), 0, dtype=torch.float, device=self.device)
 
     def get_labels(self, real=True, noise=False):
         # real labels are 1 and fake labels 0
         y = torch.full((self.batch_size,), 1 if real else 0, dtype=torch.float, device=self.device)
         # adding a little noise for the discriminator
-        if noise: y += (torch.randn(self.batch_size, device=self.device) * 2 - 1) * 0.0001 # mapping between -1 & 1 and scale down
+        if noise and real:
+            y -= torch.rand(self.batch_size, device=self.device) * 0.0001
+        elif noise and not real:
+            y += torch.rand(self.batch_size, device=self.device) * 0.0001
         return y
 
     def set_mode(self, mode):
@@ -60,26 +60,6 @@ class GAN(nn.Module):
     def get_discriminator(self):
         return self.discriminator
 
-    def opt_g(self, fake_result):
-        g_loss = self.criterion(fake_result.view(-1), self.real_label)
-        self.generator.zero_grad()
-        g_loss.backward(retain_graph=True)
-        self.g_optimizer.step()
-
-        return g_loss.item()
-
-    def opt_d(self, real_result, fake_result):
-        noise = (torch.randn(self.batch_size, device=self.device) * 2 - 1) * 0.0001
-        real_target = self.real_label + noise
-        fake_target = self.fake_label + noise
-        loss_real = self.criterion(real_result.view(-1), real_target)
-        loss_real.backward(retain_graph=True)
-        loss_fake = self.criterion(fake_result.view(-1), fake_target)
-        loss_fake.backward(retain_graph=True)
-        self.d_optimizer.step()
-
-        return loss_real.item() + loss_fake.item()
-
     # sample 'amount' amount of data from each class, reverse the standard scaling and rounds up
     def sample(self, amount, original_data, autoencoder, scaler):
         class_labels = torch.arange(self.n_classes, device=self.device).repeat_interleave(amount)
@@ -97,11 +77,13 @@ class GAN(nn.Module):
         fake_samples = pd.DataFrame(fake_samples, columns=original_data.columns)
 
         # round the necessary columns
+        # TODO this only works on one dataset currently
         fake_samples.loc[:, ~fake_samples.columns.isin(['BMI', 'DiabetesPedigreeFunction'])] = fake_samples.loc[:,
                                                                                                ~fake_samples.columns.isin(
                                                                                                    ['BMI',
                                                                                                     'DiabetesPedigreeFunction'])].round(0)
 
+        # set the column types equal to the ones in the original
         for column in fake_samples.columns:
             if column in original_data:
                 fake_samples[column] = fake_samples[column].astype(original_data[column].dtype)
@@ -127,6 +109,46 @@ class GAN(nn.Module):
         print("Summary of the Discriminator")
         summary(self.discriminator, input_size=[(1, 3, self.d_in_img_s, self.d_in_img_s), (1,)])
 
+    def opt_g(self, fake_result):
+        g_loss = self.criterion(fake_result.view(-1), self.get_labels(real=True, noise=False))
+        self.generator.zero_grad()
+        g_loss.backward(retain_graph=True)
+        self.g_optimizer.step()
+
+        return g_loss.item()
+
+    def opt_d(self, real_result, fake_result):
+        loss_real = self.criterion(real_result.view(-1), self.get_labels(real=True, noise=False))
+        loss_real.backward(retain_graph=True)
+        loss_fake = self.criterion(fake_result.view(-1), self.get_labels(real=False, noise=False))
+        loss_fake.backward(retain_graph=True)
+        self.d_optimizer.step()
+
+        return loss_real.item() + loss_fake.item()
+
+    def train_model(self, autoencoder, dataloader, epochs=1000):
+        autoencoder.eval()
+        self.set_mode("train")
+        total_g_loss = []
+        total_d_loss = []
+        for _ in tqdm(range(epochs), colour='magenta'):
+            for features, real_labels in dataloader:
+                real_images = autoencoder.encode(features, real_labels)
+
+                fake_labels = torch.randint(0, self.n_classes, (self.batch_size,), device=self.device)
+                fake_images = self.generate(fake_labels)
+
+                real_result = self.discriminate(real_images, real_labels)
+                fake_result = self.discriminate(fake_images, fake_labels)
+
+                # optimizing the discriminator
+                total_d_loss.append(self.opt_d(real_result, fake_result))
+                # optimizing the generator
+                total_g_loss.append(self.opt_g(fake_result))
+
+        Plots.plot_curve("Generator", total_g_loss)
+        Plots.plot_curve("Discriminator", total_d_loss)
+
 class Generator(nn.Module):
     def __init__(self, n_classes, g_mid_img_s, greyscale):
         super(Generator, self).__init__()
@@ -146,7 +168,7 @@ class Generator(nn.Module):
         self.generator2 = nn.Sequential(
             nn.ConvTranspose2d(129, 1024, 4, 2, 1, bias=False),
             nn.BatchNorm2d(1024),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(0.2, inplace=True),
 
             nn.ConvTranspose2d(1024, self.out_channels, 4, 2, 1, bias=False),
             nn.Tanh(),
@@ -177,17 +199,12 @@ class Discriminator(nn.Module):
         )
 
         self.discriminator = nn.Sequential(
-            nn.Conv2d(self.in_channels+1, 128, 2, 2, 1, bias=False),
-            nn.LeakyReLU(0.2),
+            nn.Conv2d(self.in_channels+1, 128, 4, 2, 1, bias=False),
+            nn.LeakyReLU(0.2, inplace=True),
 
-            nn.Conv2d(128, 128, 2, 2, 1, bias=False),
+            nn.Conv2d(128, 128, 4, 2, 1, bias=False),
             nn.BatchNorm2d(128),
-            nn.LeakyReLU(0.2),
-
-
-            nn.Conv2d(128, 128, 2, 2, 1, bias=False),
-            nn.BatchNorm2d(128),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(0.2, inplace=True),
 
             nn.Flatten(),
 

@@ -4,11 +4,15 @@ import torch.optim as optim
 from tqdm.auto import tqdm
 from torchinfo import summary
 
+import Plots
+
 class Autoencoder(nn.Module):
     def __init__(self, n_classes):
         super(Autoencoder, self).__init__()
         self.start_img_s = 7
         self.latent_img_s = 28
+        self.n_classes = n_classes
+        self.criterion = nn.MSELoss()
 
         self.embedding = nn.Sequential(
             nn.Embedding(n_classes, 10),
@@ -47,6 +51,8 @@ class Autoencoder(nn.Module):
             nn.Linear(7*7*128, 8),
         )
 
+        self.optimizer = optim.Adam(self.parameters(), lr=0.00001)
+
     def forward(self, x,  labels):
         return self.decode(self.encode(x, labels), labels)
 
@@ -70,3 +76,18 @@ class Autoencoder(nn.Module):
     def get_summary(self):
         print("Summary of the Autoencoder")
         summary(self, input_size=[(1, 1, 1, 8), (1,)])
+
+    def train_model(self, dataloader, epochs=50):
+        self.train()
+        total_loss = []
+        for _ in tqdm(range(epochs), colour="yellow"):
+            for inputs, labels in dataloader:
+                output = self.forward(inputs, labels)
+                self.optimizer.zero_grad()
+                loss = self.criterion(output, inputs)
+                loss.backward(retain_graph=True)
+                self.optimizer.step()
+                total_loss.append(loss.item())
+
+        # plot the loss curve after pre-training the AE
+        Plots.plot_curve("Pretrained AE", total_loss)

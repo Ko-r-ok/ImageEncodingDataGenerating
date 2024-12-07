@@ -1,23 +1,20 @@
 import pandas as pd
 import torch
-import torch.nn as nn
-import torch.optim as optim
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
-from tqdm.auto import tqdm
-
-from synthcity.plugins import Plugins
 
 import CGAN
 import CAE
 import Plots
 
+# check if cuda is available and set the device accordingly
 device = Plots.print_default()
+
 BATCH_SIZE = 16
 n_classes = 2
 
 # reading the data
-data = pd.read_csv('diabetes.csv')
+data = pd.read_csv('datasets/diabetes.csv')
 features = data.iloc[:, :-1].values
 labels = data.iloc[:, -1].values
 # Normalize the features
@@ -30,14 +27,8 @@ dataset = TensorDataset(features_tensor, labels_tensor)
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
 # setting up the networks
-# /TODO maybe use some other image ganarator
 autoencoder = CAE.Autoencoder(n_classes).to(device)
-# TODO ctgan tvae compare
-# TODO hyperparameter optimization
-# TODO compare with different architecture
-# TODO add the mnist result to the report
-gan = CGAN.GAN(nn.CrossEntropyLoss(), BATCH_SIZE, 28, 5, 7, 2, False).to(device)
-gan.set_mode("train")
+gan = CGAN.GAN(BATCH_SIZE, 28, 7, 7, 2).to(device)
 
 # print the summary of the AE and G
 autoencoder.get_summary()
@@ -45,46 +36,11 @@ print("")
 gan.get_summary()
 
 # pre-train the encoder
-total_ae_loss = []
-autoencoder.train()
-criterion = nn.MSELoss()
-optimizer = optim.Adam(autoencoder.parameters(), lr=0.0005)
-for _ in tqdm(range(50), colour="yellow"):
-    for inputs, labels in dataloader:
-        output = autoencoder(inputs, labels)
-        optimizer.zero_grad()
-        loss = criterion(output, inputs)
-        loss.backward()
-        optimizer.step()
-        total_ae_loss.append(loss.item())
+autoencoder.train_model(dataloader, epochs=100)
 
-# plot the loss curve after pre-training the AE
-Plots.plot_curve("Pretrained AE", total_ae_loss)
+# gan training -- this also plots the training curves
+gan.train_model(autoencoder, dataloader, epochs=1000)
 
-# gan training
-autoencoder.eval()
-total_g_loss = []
-total_d_loss = []
-for _ in tqdm(range(1000), colour='magenta'):
-    for features, real_labels in dataloader:
-        real_images = autoencoder.encode(features, real_labels)
-
-        fake_labels = torch.randint(0, n_classes, (BATCH_SIZE,), device=device)
-        fake_images = gan.generate(fake_labels)
-
-        real_result = gan.discriminate(real_images, real_labels)
-        fake_result = gan.discriminate(fake_images, fake_labels)
-
-        # optimizing the discriminator
-        total_d_loss.append(gan.opt_d(real_result, fake_result))
-
-        # optimizing the generator
-        total_g_loss.append(gan.opt_g(fake_result))
-
-
-# plot the loss curve for the G and D
-Plots.plot_curve("Generator", total_g_loss)
-Plots.plot_curve("Discriminator", total_d_loss)
 
 # generate 2x5 labels and 2x5 fake samples
 gan.set_mode("eval")
@@ -115,23 +71,6 @@ encoded_images = autoencoder.encode(combined, labels)
 # Plot the encoded real sample in a giga-plot
 Plots.plot_rgb_gigaplot("ENCODED", encoded_images, n_classes, 5)
 
-# evaluate with syntheval
-# but first let's generate 700 fake samples
-fake_samples, generated_fake_images = gan.sample(700, data.head(5), autoencoder, scaler)
-fake_samples.to_csv('cgan_data.csv', index=False)
-
-
-# generating synthetic data using synthcity
-features["target"] = labels
-
-# A conditional generative adversarial network which can handle tabular data.
-syn_model = Plugins().get("ctgan")
-syn_model.fit(features)
-ctgan_data = syn_model.generate(count = 700)
-ctgan_data.to_csv('ctgan_data.csv', index=False)
-
-# A conditional VAE network which can handle tabular data.
-syn_model = Plugins().get("tvae")
-syn_model.fit(features)
-tvae_data = syn_model.generate(count = 700)
-tvae_data.to_csv('tvae_data.csv', index=False)
+# let's generate 700 fake samples
+fake_samples, generated_fake_images = gan.sample(350, data.head(5), autoencoder, scaler)
+fake_samples.to_csv('datasets/cgan_data.csv', index=False)

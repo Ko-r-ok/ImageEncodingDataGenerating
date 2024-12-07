@@ -12,7 +12,7 @@ device = Plots.print_default()
 BATCH_SIZE = 100
 n_classes = 10
 
-gan = GAN.GAN(nn.BCELoss(), BATCH_SIZE, 28, 5, 7, n_classes, greyscale=True).to(device)
+gan = CGAN.GAN(BATCH_SIZE, 28, 7, 7, n_classes, greyscale=True).to(device)
 gan.set_mode("train")
 
 #printing the summary of the networks
@@ -34,7 +34,7 @@ dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 # train the gan
 total_d_loss = []
 total_g_loss = []
-for epoch in tqdm(range(100)):
+for epoch in tqdm(range(50)):
     for i, (real_images, real_labels) in enumerate(dataloader):
 
         real_images, real_labels = real_images.to(device), real_labels.to(device)
@@ -45,8 +45,8 @@ for epoch in tqdm(range(100)):
         real_result = gan.discriminate(real_images, real_labels)
         fake_result = gan.discriminate(fake_images, fake_labels)
 
-        total_d_loss.append(gan.opt_D(real_result, fake_result))
-        total_g_loss.append(gan.opt_G(fake_result))
+        total_d_loss.append(gan.opt_d(real_result, fake_result))
+        total_g_loss.append(gan.opt_g(fake_result))
 
 # save the weights
 torch.save(gan.get_generator().state_dict(), "mnist_gen.pt")
