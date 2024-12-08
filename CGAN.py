@@ -20,7 +20,7 @@ class CGAN(nn.Module):
         self.greyscale = greyscale
 
         # init the networks and apply weight init
-        self.generator = Generator(n_classes, g_mid_img_s, greyscale)
+        self.generator = Generator(self.noise_size,n_classes, g_mid_img_s, greyscale)
         self.generator.apply(self.weights_init)
         self.discriminator = Discriminator(d_in_img_s, d_out_img_s, n_classes, greyscale)
         self.discriminator.apply(self.weights_init)
@@ -29,15 +29,12 @@ class CGAN(nn.Module):
         self.g_optimizer = optim.Adam(self.generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
         self.d_optimizer = optim.Adam(self.discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
 
-    def get_labels(self, real=True, noise=False):
+    def get_labels(self, real=True):
         # real labels are 1 and fake labels 0
-        y = torch.full((self.batch_size,), 1 if real else 0, dtype=torch.float, device=self.device)
-        # adding a little noise for the discriminator
-        if noise and real:
-            y -= torch.rand(self.batch_size, device=self.device) * 0.0001
-        elif noise and not real:
-            y += torch.rand(self.batch_size, device=self.device) * 0.0001
-        return y
+        if real:
+            return torch.ones(self.batch_size, 1, device=self.device)
+        else:
+            return torch.zeros(self.batch_size, 1, device=self.device)
 
     def set_mode(self, mode):
         if mode == "train":
@@ -98,20 +95,20 @@ class CGAN(nn.Module):
 
     def discriminate(self, x, labels):
         # adding a small noise to the labels
-        return self.discriminator(x, labels + torch.randn(self.batch_size, device=self.device) * 0.0001)
+        return self.discriminator(x, labels + torch.rand(self.batch_size, device=self.device) * 0.00001)
 
     def set_batch_size(self, batch_size):
         self.batch_size = batch_size
 
     def get_summary(self):
         print("Summary of the Generator")
-        summary(self.generator, input_size=[(self.noise_size,), (1,)])
+        summary(self.generator, input_size=[(1, 100), (1,)])
         print("")
         print("Summary of the Discriminator")
         summary(self.discriminator, input_size=[(1, 1 if self.greyscale else 3, self.d_in_img_s, self.d_in_img_s), (1,)])
 
     def opt_g(self, fake_result):
-        g_loss = self.criterion(fake_result.view(-1), self.get_labels(real=True, noise=False))
+        g_loss = self.criterion(fake_result, self.get_labels(real=True))
         self.generator.zero_grad()
         g_loss.backward(retain_graph=True)
         self.g_optimizer.step()
@@ -119,13 +116,14 @@ class CGAN(nn.Module):
         return g_loss.item()
 
     def opt_d(self, real_result, fake_result):
-        loss_real = self.criterion(real_result.view(-1), self.get_labels(real=True, noise=False))
-        loss_real.backward(retain_graph=True)
-        loss_fake = self.criterion(fake_result.view(-1), self.get_labels(real=False, noise=False))
-        loss_fake.backward(retain_graph=True)
+        loss_real = self.criterion(real_result, self.get_labels(real=True))
+        loss_fake = self.criterion(fake_result, self.get_labels(real=False))
+        d_loss = (loss_real + loss_fake) / 2
+        self.discriminator.zero_grad()
+        d_loss.backward(retain_graph=True)
         self.d_optimizer.step()
 
-        return loss_real.item() + loss_fake.item()
+        return d_loss.item()
 
     def train_model(self, autoencoder, dataloader, epochs=1000):
         autoencoder.eval()
@@ -151,40 +149,38 @@ class CGAN(nn.Module):
         Plots.plot_curve("Discriminator", total_d_loss)
 
 class Generator(nn.Module):
-    def __init__(self, n_classes, g_mid_img_s, greyscale):
+    def __init__(self, noise_size, n_classes, g_mid_img_s, greyscale):
         super(Generator, self).__init__()
         self.g_mid_img_s = g_mid_img_s
         self.out_channels = 1 if greyscale else 3
 
         self.embedding = nn.Sequential(
-            nn.Embedding(n_classes, 10),
-            nn.Linear(10, self.g_mid_img_s * self.g_mid_img_s)
+            nn.Embedding(n_classes, n_classes),
         )
 
         self.generator1 = nn.Sequential(
-            nn.Linear(100, 128 * self.g_mid_img_s * self.g_mid_img_s),
-            nn.LeakyReLU(0.2)
+            nn.Linear(noise_size+n_classes, 128 * self.g_mid_img_s * self.g_mid_img_s),
         )
 
         self.generator2 = nn.Sequential(
-            nn.ConvTranspose2d(129, 512, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(512),
+            nn.BatchNorm2d(128),
+
+            nn.ConvTranspose2d(128, 256, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(256),
             nn.LeakyReLU(0.2, inplace=True),
 
-            nn.ConvTranspose2d(512, self.out_channels, 4, 2, 1, bias=False),
-            nn.Tanh(),
+            nn.ConvTranspose2d(256, self.out_channels, 4, 2, 1, bias=False),
+            nn.Tanh()
 
             # the output of the generator is an RGB image if input=7x7 => output=28x28 | if input=16x16 => output=64x64
         )
 
     def forward(self, x, labels):
         labels = labels.long()
-        label_embedding = self.embedding[0](labels)
-        label_embedding = self.embedding[1](label_embedding).view(-1, 1, self.g_mid_img_s, self.g_mid_img_s)
-
-        x = self.generator1(x).view(-1, 128, self.g_mid_img_s, self.g_mid_img_s)
-        x = torch.cat([x, label_embedding], dim=1)
-        return self.generator2(x)
+        label_embedding = self.embedding(labels) # first label embedding
+        x = torch.cat((x, label_embedding), dim=1) # adding the label to the noise
+        x = self.generator1(x).view(-1, 128, self.g_mid_img_s, self.g_mid_img_s) # upscale to img * img * channels
+        return self.generator2(x) # pass it through the convT layers
 
 
 class Discriminator(nn.Module):
@@ -195,28 +191,26 @@ class Discriminator(nn.Module):
         self.in_channels = 1 if greyscale else 3
 
         self.embedding = nn.Sequential(
-            nn.Embedding(n_classes, 10),
-            nn.Linear(10, 1 * self.in_img_s * self.in_img_s)
+            nn.Embedding(n_classes, in_img_s * in_img_s),
         )
 
         self.discriminator = nn.Sequential(
-            nn.Conv2d(self.in_channels+1, 128, 4, 2, 1, bias=False),
+            nn.Conv2d(self.in_channels+1, 128, 3, 2, 1, bias=False),
             nn.LeakyReLU(0.2, inplace=True),
 
-            nn.Conv2d(128, 128, 4, 2, 1, bias=False),
+            nn.Conv2d(128, 128, 3, 2, 1, bias=False),
             nn.BatchNorm2d(128),
             nn.LeakyReLU(0.2, inplace=True),
 
             nn.Flatten(),
+            nn.Dropout(0.4),
 
             nn.Linear(128 * self.out_img_s * self.out_img_s, 1),
-            nn.Sigmoid(),
+            nn.Sigmoid()
         )
     def forward(self, x, labels):
         labels = labels.long()
-        label_embedding = self.embedding[0](labels)
-        label_embedding = self.embedding[1](label_embedding).view(-1, 1, self.in_img_s, self.in_img_s)
-
+        label_embedding = self.embedding(labels).view(-1, 1, self.in_img_s, self.in_img_s)
         x = torch.cat([x, label_embedding], dim=1)
         return self.discriminator(x)
 
