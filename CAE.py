@@ -27,11 +27,11 @@ class Autoencoder(nn.Module):
         )
 
         self.encoder2 = nn.Sequential(
-            nn.ConvTranspose2d(1, 128, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(128),
+            nn.ConvTranspose2d(1, 256, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(256),
             nn.LeakyReLU(0.2, inplace=True),
 
-            nn.ConvTranspose2d(128, 3, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose2d(256, 3, kernel_size=4, stride=2, padding=1),
             nn.Tanh(),
         )
 
@@ -40,17 +40,17 @@ class Autoencoder(nn.Module):
             nn.Linear(10, self.latent_img_s * self.latent_img_s),
         )
         self.decoder2 = nn.Sequential(
-            nn.Conv2d(4, 128, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(128),
+            nn.Conv2d(4, 256, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(256),
             nn.LeakyReLU(0.2, inplace=True),
 
-            nn.Conv2d(128, 128, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(128),
+            nn.Conv2d(256, 256, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(256),
             nn.LeakyReLU(0.2, inplace=True),
 
             nn.Flatten(),
 
-            nn.Linear(7*7*128, self.n_feature),
+            nn.Linear(256*7*7, self.n_feature),
         )
 
         self.optimizer = optim.Adam(self.parameters(), lr=0.00001)
