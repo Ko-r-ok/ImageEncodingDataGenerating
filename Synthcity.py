@@ -3,6 +3,8 @@ import pandas as pd
 
 import Support
 
+# TODO regen for both
+
 # generate data with synthcity and transform it to a normal dataframe -- this is a mess
 def handle_synthcitys_mess(model, amount):
     gen_data = model.generate(count=amount).unpack()

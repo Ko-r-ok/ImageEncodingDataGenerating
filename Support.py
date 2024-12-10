@@ -27,6 +27,32 @@ def read_file(location):
 
     return df
 
+
+def plot_gray_gigaplot(images, title, num_classes=10, examples_per_class=10):
+    images = (images + 1) / 2
+    fig, axes = plt.subplots(num_classes, examples_per_class, figsize=(examples_per_class, num_classes))
+    for i in range(num_classes):
+        for j in range(examples_per_class):
+            idx = i * examples_per_class + j
+            img = images[idx].detach().cpu().squeeze().numpy()  # Convert to numpy
+            axes[i, j].imshow(img, cmap='gray')  # Assuming grayscale images
+            axes[i, j].axis('off')
+    plt.tight_layout()
+    plt.suptitle(title, fontsize=16, y=1)
+    plt.savefig(f'{title}.png')
+    plt.show()
+
+
+def plot_curve(title, array):
+    curve = np.convolve(array, np.ones((1,)) / 1, mode='valid')
+    plt.plot([j for j in range(len(curve))], curve, color='darkorange', alpha=1)
+    plt.title(title)
+    plt.ylabel("Loss")
+    plt.xlabel("Steps")
+    plt.savefig(f"{title}.png")
+    plt.show()
+
+
 class Support:
     def __init__(self, batch_size=128, n_classes=2):
         self.device = self.print_default()
@@ -53,27 +79,6 @@ class Support:
         plt.tight_layout()
         plt.suptitle(title, fontsize=12, y=1)
         plt.savefig(f"{title} {datetime.now().strftime('%m_%d')}.png")
-        plt.show()
-
-    def plot_gray_gigaplot(self, images, num_classes=10, examples_per_class=10):
-        images = (images + 1) / 2
-        fig, axes = plt.subplots(num_classes, examples_per_class, figsize=(examples_per_class, num_classes))
-        for i in range(num_classes):
-            for j in range(examples_per_class):
-                idx = i * examples_per_class + j
-                img = images[idx].detach().cpu().squeeze().numpy()  # Convert to numpy
-                axes[i, j].imshow(img, cmap='gray')  # Assuming grayscale images
-                axes[i, j].axis('off')
-        plt.tight_layout()
-        plt.show()
-
-    def plot_curve(self, title, array):
-        curve = np.convolve(array, np.ones((1,)) / 1, mode='valid')
-        plt.plot([j for j in range(len(curve))], curve, color='darkorange', alpha=1)
-        plt.title(title)
-        plt.ylabel("Loss")
-        plt.xlabel("Steps")
-        plt.savefig(f"{title}.png")
         plt.show()
 
     def print_default(self):
@@ -123,7 +128,7 @@ class Support:
         print(f"{title}:")
         print(dataframe.head(len(dataframe)).to_string())
 
-    def generate_result(self, gan, autoencoder, round_exceptions, title):
+    def generate_result(self, gan, autoencoder, round_exceptions, title, conditional):
         # generate and display 5 real examples + the encoded images from both classes
         real_samples, encoded_images = self.get_real_samples(autoencoder)
         self.display_text_samples(f"5-5 Real Samples {title}", real_samples)
@@ -131,33 +136,33 @@ class Support:
 
         # generate and display 5 fake examples + the generated images from both classes
         fake_samples, generated_fake_images = gan.sample(350, self.dataframe.head(5), autoencoder, self.scaler, round_exceptions)
-        self.display_text_samples(f"5-5 Fake Samples {title}", pd.concat([fake_samples.iloc[:5], fake_samples.iloc[350:355]]))
-        self.plot_rgb_gigaplot(f"Generated Images {title}", torch.cat((generated_fake_images[:5, :, :, :], generated_fake_images[350:355, :, :, :]), dim=0))
+        self.display_text_samples(f"5-5 Fake Samples {title} CGAN={conditional}", pd.concat([fake_samples.iloc[:5], fake_samples.iloc[350:355]]))
+        self.plot_rgb_gigaplot(f"Generated Images {title} CGAN={conditional}", torch.cat((generated_fake_images[:5, :, :, :], generated_fake_images[350:355, :, :, :]), dim=0))
         return fake_samples
 
-    def generate_models(self):
+    def generate_models(self, conditional):
         autoencoder = CAE.Autoencoder(self.n_features, self.n_classes).to(self.device)
-        gan = CGAN.CGAN(self.batch_size, 28, 7, 7, 2).to(self.device)
+        gan = CGAN.CGAN(self.batch_size, 28, 7, 7, 2, conditional=conditional).to(self.device)
 
         # print the summary of the AE and G
         autoencoder.get_summary()
         gan.get_summary()
         return gan, autoencoder
 
-    def train_models(self, location, title):
+    def train_models(self, location, title, conditional):
         self.read_data(location)
-        gan, autoencoder = self.generate_models()
+        gan, autoencoder = self.generate_models(conditional)
         # pre-train the encoder
         total_ae_loss = autoencoder.train_model(self.dataloader, epochs=1000)
-        self.plot_curve(f"Pre-trained AE Loss {title}", total_ae_loss)
+        plot_curve(f"Pre-trained AE Loss {title} CGAN={conditional}", total_ae_loss)
 
         # gan training -- this also plots the training curves
         total_d_loss, total_g_loss = gan.train_model(autoencoder, self.dataloader, epochs=10000)
-        self.plot_curve(f"Discriminator Loss {title}", total_d_loss)
-        self.plot_curve(f"Generator Loss {title}", total_g_loss)
+        plot_curve(f"Discriminator Loss {title} CGAN={conditional}", total_d_loss)
+        plot_curve(f"Generator Loss {title} CGAN={conditional}", total_g_loss)
 
         return gan, autoencoder
 
-    def fit(self, location, round_exceptions, title):
-        gan, autoencoder = self.train_models(location, title)
-        return self.generate_result(gan, autoencoder, round_exceptions, title)
+    def fit(self, location, round_exceptions, title, conditional=True):
+        gan, autoencoder = self.train_models(location, title, conditional)
+        return self.generate_result(gan, autoencoder, round_exceptions, title, conditional)

@@ -1,5 +1,4 @@
 import torch
-from matplotlib import pyplot as plt
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -10,7 +9,6 @@ import Support
 
 batch_size= 128
 n_classes = 10
-support = Support.Support()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 use_pretrained = True
@@ -62,8 +60,8 @@ else:
     torch.save(cgan.get_generator().state_dict(), "mnist_gen.pt")
     torch.save(cgan.get_discriminator().state_dict(), "mnist_dis.pt")
 
-    support.plot_curve("Discriminator Loss", total_d_loss)
-    support.plot_curve("Generator Loss", total_g_loss)
+    Support.plot_curve("Discriminator Loss", total_d_loss)
+    Support.plot_curve("Generator Loss", total_g_loss)
 
 # printing out 10 of each clothes
 cgan.set_mode("eval")
@@ -76,4 +74,4 @@ with torch.no_grad():
     generated_images = cgan.generate(class_labels)
 
 # Plot the gigaplot
-support.plot_gray_gigaplot(generated_images, n_classes, examples_per_class)
+Support.plot_gray_gigaplot(generated_images, "Generated Images MNIST", n_classes, examples_per_class)
