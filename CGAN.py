@@ -6,8 +6,6 @@ import torch.optim as optim
 from tqdm.auto import tqdm
 from torchinfo import summary
 
-import Plots
-
 
 class CGAN(nn.Module):
     def __init__(self, batch_size, d_in_img_s, d_out_img_s, g_mid_img_s, n_classes, greyscale=False):
@@ -20,7 +18,7 @@ class CGAN(nn.Module):
         self.greyscale = greyscale
 
         # init the networks and apply weight init
-        self.generator = Generator(self.noise_size,n_classes, g_mid_img_s, greyscale)
+        self.generator = Generator(self.noise_size, n_classes, g_mid_img_s, greyscale)
         self.generator.apply(self.weights_init)
         self.discriminator = Discriminator(d_in_img_s, d_out_img_s, n_classes, greyscale)
         self.discriminator.apply(self.weights_init)
@@ -59,7 +57,8 @@ class CGAN(nn.Module):
         return self.discriminator
 
     # sample 'amount' amount of data from each class, reverse the standard scaling and rounds up
-    def sample(self, amount, original_data, autoencoder, scaler):
+    def sample(self, amount, original_data, autoencoder, scaler, round_exceptions):
+        self.set_mode("eval")
         class_labels = torch.arange(self.n_classes, device=self.device).repeat_interleave(amount)
         self.set_batch_size(class_labels.size(0))
         generated_fake_images = self.generate(class_labels)
@@ -74,12 +73,9 @@ class CGAN(nn.Module):
         fake_samples = np.concatenate((fake_samples, class_labels), axis=1)
         fake_samples = pd.DataFrame(fake_samples, columns=original_data.columns)
 
-        # round the necessary columns
+        # round the necessary columns -- everything except for the exceptions
         # TODO this only works on one dataset currently
-        fake_samples.loc[:, ~fake_samples.columns.isin(['BMI', 'DiabetesPedigreeFunction'])] = fake_samples.loc[:,
-                                                                                               ~fake_samples.columns.isin(
-                                                                                                   ['BMI',
-                                                                                                    'DiabetesPedigreeFunction'])].round(0)
+        fake_samples.loc[:, ~fake_samples.columns.isin(round_exceptions)] = fake_samples.loc[:, ~fake_samples.columns.isin(round_exceptions)].round(0)
 
         # set the column types equal to the ones in the original
         for column in fake_samples.columns:
@@ -132,6 +128,8 @@ class CGAN(nn.Module):
         total_d_loss = []
         for _ in tqdm(range(epochs), colour='magenta'):
             for features, real_labels in dataloader:
+                batch_size = len(features)
+                self.set_batch_size(batch_size)
                 real_images = autoencoder.encode(features, real_labels)
 
                 fake_labels = torch.randint(0, self.n_classes, (self.batch_size,), device=self.device)
@@ -145,8 +143,7 @@ class CGAN(nn.Module):
                 # optimizing the generator
                 total_g_loss.append(self.opt_g(fake_result))
 
-        Plots.plot_curve("Generator", total_g_loss)
-        Plots.plot_curve("Discriminator", total_d_loss)
+        return total_d_loss, total_g_loss
 
 class Generator(nn.Module):
     def __init__(self, noise_size, n_classes, g_mid_img_s, greyscale):
@@ -165,11 +162,11 @@ class Generator(nn.Module):
         self.generator2 = nn.Sequential(
             nn.BatchNorm2d(128),
 
-            nn.ConvTranspose2d(128, 256, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(256),
+            nn.ConvTranspose2d(128, 512, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(512),
             nn.LeakyReLU(0.2, inplace=True),
 
-            nn.ConvTranspose2d(256, self.out_channels, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(512, self.out_channels, 4, 2, 1, bias=False),
             nn.Tanh()
 
             # the output of the generator is an RGB image if input=7x7 => output=28x28 | if input=16x16 => output=64x64
@@ -191,26 +188,30 @@ class Discriminator(nn.Module):
         self.in_channels = 1 if greyscale else 3
 
         self.embedding = nn.Sequential(
-            nn.Embedding(n_classes, in_img_s * in_img_s),
+            nn.Embedding(n_classes, n_classes),
         )
 
-        self.discriminator = nn.Sequential(
+        self.discriminator1 = nn.Sequential(
+            nn.Linear(n_classes, 1 * self.in_img_s * self.in_img_s),
+        )
+
+        self.discriminator2 = nn.Sequential(
             nn.Conv2d(self.in_channels+1, 128, 3, 2, 1, bias=False),
             nn.LeakyReLU(0.2, inplace=True),
 
-            nn.Conv2d(128, 128, 3, 2, 1, bias=False),
-            nn.BatchNorm2d(128),
+            nn.Conv2d(128, 256, 3, 2, 1, bias=False),
+            nn.BatchNorm2d(256),
             nn.LeakyReLU(0.2, inplace=True),
 
             nn.Flatten(),
             nn.Dropout(0.4),
 
-            nn.Linear(128 * self.out_img_s * self.out_img_s, 1),
+            nn.Linear(256 * self.out_img_s * self.out_img_s, 1),
             nn.Sigmoid()
         )
     def forward(self, x, labels):
         labels = labels.long()
-        label_embedding = self.embedding(labels).view(-1, 1, self.in_img_s, self.in_img_s)
+        label_embedding = self.embedding(labels)
+        label_embedding = self.discriminator1(label_embedding).view(-1, 1, self.in_img_s, self.in_img_s)
         x = torch.cat([x, label_embedding], dim=1)
-        return self.discriminator(x)
-
+        return self.discriminator2(x)
