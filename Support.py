@@ -7,8 +7,8 @@ from torch.utils.data import DataLoader, TensorDataset
 import pandas as pd
 from scipy.io import arff
 
-import CGAN
-import CAE
+import GAN
+import AE
 
 def read_file(location):
     if 'arff' in location:
@@ -53,9 +53,22 @@ def plot_curve(title, array):
     plt.show()
 
 
+def print_default():
+    # getting and setting and displaying the used device
+    try:
+        print(f"Is CUDA supported by this system? {torch.cuda.is_available()}")
+        print(f"CUDA version: {torch.version.cuda}")
+        print(f"ID of current CUDA device:{torch.cuda.current_device()}")
+        print(f"Name of current CUDA device:{torch.cuda.get_device_name(torch.cuda.current_device())}")
+    except Exception as e:
+        print(e)
+
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 class Support:
     def __init__(self, batch_size=128, n_classes=2):
-        self.device = self.print_default()
+        self.device = print_default()
         self.scaler = StandardScaler()
         self.n_classes = n_classes
         self.batch_size = batch_size
@@ -81,31 +94,24 @@ class Support:
         plt.savefig(f"{title} {datetime.now().strftime('%m_%d')}.png")
         plt.show()
 
-    def print_default(self):
-        # getting and setting and displaying the used device
-        try:
-            print(f"Is CUDA supported by this system? {torch.cuda.is_available()}")
-            print(f"CUDA version: {torch.version.cuda}")
-            print(f"ID of current CUDA device:{torch.cuda.current_device()}")
-            print(f"Name of current CUDA device:{torch.cuda.get_device_name(torch.cuda.current_device())}")
-        except Exception as e:
-            print(e)
-
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    def read_data(self, location):
+    def read_data(self, location, conditional):
         # reading the data
         try:
             self.dataframe = read_file(location) # returning dataframe
         except ValueError as e:
             print(e)
-        self.n_features = self.dataframe.shape[1] - 1
+        self.n_features = (self.dataframe.shape[1] - 1) if conditional else self.dataframe.shape[1]
 
-        # Normalize the features
-        normalized_features = self.scaler.fit_transform(self.dataframe.iloc[:, :-1].values)
+        if conditional:
+            # Normalize the features
+            normalized_features = self.scaler.fit_transform(self.dataframe.iloc[:, :-1].values)
+            # Convert to tensors, concat and then convert to dataloader
+            features_tensor = torch.tensor(normalized_features, dtype=torch.float32, device=self.device)
+        else:
+            # normalize the labels as well
+            normalized_features = self.scaler.fit_transform(self.dataframe.values)
+            features_tensor = torch.tensor(normalized_features, dtype=torch.float32, device=self.device)
 
-        # Convert to tensors, concat and then convert to dataloader
-        features_tensor = torch.tensor(normalized_features, dtype=torch.float32, device=self.device)
         labels_tensor = torch.tensor(self.dataframe.iloc[:, -1].values, dtype=torch.float32, device=self.device)
         self.dataset = TensorDataset(features_tensor, labels_tensor)
         self.dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
@@ -115,12 +121,17 @@ class Support:
         class_0 = self.dataframe[self.dataframe['Outcome'] == 0].iloc[:5]
         class_1 = self.dataframe[self.dataframe['Outcome'] == 1].iloc[:5]
         combined = pd.concat([class_0, class_1])
-        labels = combined.pop('Outcome')
+        if autoencoder.get_conditional():
+            labels = combined.pop('Outcome')
+        else:
+            labels = combined.pop('Outcome')
+            combined["Outcome"] = labels
 
         combined_t = torch.tensor(combined.values, dtype=torch.float32, device=self.device)
         labels_t = torch.tensor(labels.values, dtype=torch.float32, device=self.device)
         # encode only features with labels
-        combined["Outcome"] = labels
+        if autoencoder.get_conditional():
+            combined["Outcome"] = labels
         return combined, autoencoder.encode(combined_t, labels_t)
 
     def display_text_samples(self, title, dataframe):
@@ -141,8 +152,8 @@ class Support:
         return fake_samples
 
     def generate_models(self, conditional):
-        autoencoder = CAE.Autoencoder(self.n_features, self.n_classes).to(self.device)
-        gan = CGAN.CGAN(self.batch_size, 28, 7, 7, 2, conditional=conditional).to(self.device)
+        autoencoder = AE.Autoencoder(conditional, self.n_features, self.n_classes).to(self.device)
+        gan = GAN.GAN(self.batch_size, 28, 7, 7, 2, conditional=conditional).to(self.device)
 
         # print the summary of the AE and G
         autoencoder.get_summary()
@@ -150,10 +161,10 @@ class Support:
         return gan, autoencoder
 
     def train_models(self, location, title, conditional):
-        self.read_data(location)
+        self.read_data(location, conditional)
         gan, autoencoder = self.generate_models(conditional)
         # pre-train the encoder
-        total_ae_loss = autoencoder.train_model(self.dataloader, epochs=1000)
+        total_ae_loss = autoencoder.train_model(self.dataloader, epochs=500)
         plot_curve(f"Pre-trained AE Loss {title} CGAN={conditional}", total_ae_loss)
 
         # gan training -- this also plots the training curves

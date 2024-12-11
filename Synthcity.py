@@ -3,7 +3,7 @@ import pandas as pd
 
 import Support
 
-# TODO regen for both
+# TODO regen for both dataset
 
 # generate data with synthcity and transform it to a normal dataframe -- this is a mess
 def handle_synthcitys_mess(model, amount):

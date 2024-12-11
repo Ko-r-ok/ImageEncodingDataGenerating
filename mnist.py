@@ -3,26 +3,27 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-import CGAN
+import GAN
 import Support
 
 
 batch_size= 128
 n_classes = 10
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = Support.print_default()
 
-use_pretrained = True
+use_pretrained = False
+conditional = False
 
-cgan = CGAN.CGAN(batch_size, 28, 7, 7, n_classes, greyscale=True).to(device)
+gan = GAN.GAN(batch_size, 28, 7, 7, n_classes, conditional=conditional, greyscale=True).to(device)
 
 if use_pretrained:
-    cgan.get_generator().load_state_dict(torch.load('mnist_gen.pt'))
-    cgan.get_discriminator().load_state_dict(torch.load('mnist_dis.pt'))
+    gan.get_generator().load_state_dict(torch.load('weights/mnist_cgen.pth' if conditional else 'weights/mnist_gen.pth'))
+    gan.get_discriminator().load_state_dict(torch.load('weights/mnist_cdis.pth' if conditional else 'weights/mnist_dis.pth'))
 else:
-    cgan.set_mode("train")
+    gan.set_mode("train")
 
     #printing the summary of the networks
-    cgan.get_summary()
+    gan.get_summary()
     def load_data():
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -40,38 +41,38 @@ else:
     # train the gan
     total_d_loss = []
     total_g_loss = []
-    for epoch in tqdm(range(100)):
+    for epoch in tqdm(range(10)):
         for i, (real_images, real_labels) in enumerate(dataloader):
             batch_size = real_images.size(0)
-            cgan.set_batch_size(batch_size)
+            gan.set_batch_size(batch_size)
             real_images, real_labels = real_images.to(device), real_labels.to(device)
 
             fake_labels = torch.randint(0, n_classes, (batch_size,), device=device)
-            fake_images = cgan.generate(fake_labels)
+            fake_images = gan.generate(fake_labels)
 
-            real_result = cgan.discriminate(real_images, real_labels)
-            fake_result = cgan.discriminate(fake_images, fake_labels)
+            real_result = gan.discriminate(real_images, real_labels)
+            fake_result = gan.discriminate(fake_images, fake_labels)
 
-            total_g_loss.append(cgan.opt_g(fake_result))
-            total_d_loss.append(cgan.opt_d(real_result, fake_result))
+            total_g_loss.append(gan.opt_g(fake_result))
+            total_d_loss.append(gan.opt_d(real_result, fake_result))
 
 
     # save the weights
-    torch.save(cgan.get_generator().state_dict(), "mnist_gen.pt")
-    torch.save(cgan.get_discriminator().state_dict(), "mnist_dis.pt")
+    torch.save(gan.get_generator().state_dict(), "weights/mnist_cgen.pth" if conditional else "weights/mnist_gen.pth")
+    torch.save(gan.get_discriminator().state_dict(), "weights/mnist_cdis.pth" if conditional else "weights/mnist_dis.pth")
 
     Support.plot_curve("Discriminator Loss", total_d_loss)
     Support.plot_curve("Generator Loss", total_g_loss)
 
 # printing out 10 of each clothes
-cgan.set_mode("eval")
+gan.set_mode("eval")
 examples_per_class = 10
 with torch.no_grad():
     # Generate class labels
-    cgan.set_batch_size(n_classes * examples_per_class)
+    gan.set_batch_size(n_classes * examples_per_class)
     class_labels = torch.arange(n_classes, device=device).repeat_interleave(examples_per_class)
     # Generate fake images
-    generated_images = cgan.generate(class_labels)
+    generated_images = gan.generate(class_labels)
 
 # Plot the gigaplot
 Support.plot_gray_gigaplot(generated_images, "Generated Images MNIST", n_classes, examples_per_class)
